@@ -956,7 +956,7 @@ class CUDAGraphNode:
         if dst_tensors:
             torch._foreach_copy_(dst_tensors, src_tensors)
 
-    def check_static_inputs_are_stable(self, new_inputs):
+    def check_static_inputs_are_stable(self, new_inputs) -> bool:
         # avoid checking managed tensor static points since we already checked those in check_invariants
         if (
             not self.rerecord_if_static_inputs_change
@@ -966,6 +966,12 @@ class CUDAGraphNode:
                 self.non_managed_static_input_idxs,
             )
         ):
+            print(f"here. {self.rerecord_if_static_inputs_change}")
+            if (
+                torch._inductor.config.triton.cudagraph_fallback_to_eager_instead_of_error
+            ):
+                return False
+
             # this should error
             static_tensors = [new_inputs[i] for i in self.non_managed_static_input_idxs]
             data_ptrs = [
@@ -984,6 +990,8 @@ class CUDAGraphNode:
                     )
             torch._check(False, lambda: error_msg)
 
+        return True
+
     def run_first_inputs(self, new_inputs):
         if config.triton.fast_path_cudagraph_asserts:
             self.debug_check_invariants_before_invocation()
@@ -996,7 +1004,8 @@ class CUDAGraphNode:
         return outputs
 
     def run(self, new_inputs):
-        self.check_static_inputs_are_stable(new_inputs)
+        if not self.check_static_inputs_are_stable(new_inputs):
+            return self.wrapped_function.model(new_inputs), False
 
         self._copy_inputs_and_remove_from_src(self.reconstructed_inputs, new_inputs)
         new_inputs.clear()
@@ -1014,7 +1023,7 @@ class CUDAGraphNode:
         # Reset this to run the check in the future
         self.static_inputs_stable = False
 
-        return outputs
+        return outputs, True
 
     def reconstruct_outputs(self):
         "Reconstruct output tensors according to their saved metadata and alias information"
@@ -1796,6 +1805,12 @@ class CUDAGraphTreeManager:
         ] = defaultdict(dict)
         self.warmup_node_counter = itertools.count(start=-1, step=-1)
 
+        # mapping from graph_id to (function id to record count). We fall back to
+        # eager function if a function is re-recorded frequently on a node.
+        self.num_record: Dict[Optional[GraphID], Dict[FunctionID, int]] = defaultdict(
+            lambda: defaultdict(lambda: 0)
+        )
+
         # whether we the current node is in a state of warmup, recording, execution. If
         # there is no current node the state will be ExecutionState.None.
         self.path_state = ExecutionState.NONE
@@ -1906,7 +1921,11 @@ class CUDAGraphTreeManager:
         # Early exit if the function mutates inputs which are neither parameters/buffers nor
         # cudagraph recorded tensors. This check should happen after `try_end_curr_recording`
         # and `try_end_curr_warmup` which may change self.current_node.
-        if self.non_cudagraph_managed_mutation_hint[node_id][function_id]:
+        if (
+            self.non_cudagraph_managed_mutation_hint[node_id][function_id]
+            or self.num_record[node_id][function_id]
+            > torch._inductor.config.triton.cudagraph_max_recording
+        ):
             return self.ids_to_funcs[function_id].model(new_inputs)
 
         # warming up a function and subsequentally recording may use different memory addresses
@@ -1993,6 +2012,20 @@ class CUDAGraphTreeManager:
         self.current_node = None
 
     def record_function(self, new_inputs, function_id) -> List[Optional[Tensor]]:
+        parent_node_id = self._get_node_id()
+        self.num_record[parent_node_id][function_id] += 1
+        if (
+            self.num_record[parent_node_id][function_id]
+            > torch._inductor.config.triton.cudagraph_max_recording
+        ):
+            _id = parent_node_id.id if parent_node_id else None
+            log_cudagraph_skip_and_bump_counter(
+                f"skipping cudagraph due to function {function_id.id} exceeding max "
+                f"recording limit (={torch._inductor.config.triton.cudagraph_max_recording}) "
+                f"on cudagraph node {_id}"
+            )
+            return self.ids_to_funcs[function_id].model(new_inputs)
+
         graph_id = self.new_graph_id()
         log.debug(
             "Recording function %d of graph recording id %d",
@@ -2021,10 +2054,14 @@ class CUDAGraphTreeManager:
         return node.run_first_inputs(new_inputs)
 
     def execute_node(self, node: CUDAGraphNode, new_inputs) -> List[Optional[Tensor]]:
-        self.current_node = node
-        self.path_state = ExecutionState.EXECUTION
-        self.update_generation()
-        return node.run(new_inputs)
+        out, executed_cudagraph = node.run(new_inputs)
+
+        if executed_cudagraph:
+            self.current_node = node
+            self.path_state = ExecutionState.EXECUTION
+            self.update_generation()
+
+        return out
 
     def run_eager(self, new_inputs, function_id: FunctionID):
         # this is only stored on current node, because when we start a new path,

@@ -1834,7 +1834,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
                 # Fwd + bwd graphs for each version of the function => 4 graphs
                 self.assertEqual(self.get_manager().new_graph_id().id, 4)
 
-        @torch._inductor.config.patch("triton.cudagraphs", True)
         @torch._dynamo.config.patch("error_on_recompile", True)
         @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
         def test_multi_dispatch_single_compile_param_inputs(self):
@@ -1846,7 +1845,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             # Fwd + bwd graphs for each version of the function => 4 graphs
             self.run_static_input_param_test(fn, 4)
 
-        @torch._inductor.config.patch("triton.cudagraphs", True)
         @torch._dynamo.config.patch("error_on_recompile", True)
         @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
         def test_multi_dispatch_single_compile_builtin_module(self):
@@ -1855,7 +1853,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             # Note: Linear is a builtin module so we enable that config setting above
             self._module_test(torch.nn.Linear(2, 3, device="cuda"))
 
-        @torch._inductor.config.patch("triton.cudagraphs", True)
         @torch._dynamo.config.patch("error_on_recompile", True)
         @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
         def test_multi_dispatch_custom_module(self):
@@ -1873,7 +1870,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
                 TestModule(torch.nn.Parameter(torch.rand([2, 2], device="cuda")))
             )
 
-        @torch._inductor.config.patch("triton.cudagraphs", True)
         @torch._dynamo.config.patch("error_on_recompile", True)
         @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
         def test_multi_dispatch_child_node(self):
@@ -1893,7 +1889,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             # and then two backward graphs
             self.run_static_input_param_test(fn, 5)
 
-        @torch._inductor.config.patch("triton.cudagraphs", True)
         @torch._dynamo.config.patch("error_on_recompile", True)
         @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
         def test_multi_dispatch_parent_node(self):
@@ -1913,6 +1908,33 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             # two versions of Graph 1
             # and then two backward graphs
             self.run_static_input_param_test(fn, 6)
+
+        # cudagraph_fallback_to_eager_instead_of_error=True: fall back if I change the static input addresses
+
+        @torch._dynamo.config.patch("error_on_recompile", True)
+        @torch._dynamo.config.patch("inline_inbuilt_nn_modules", True)
+        @torch._inductor.config.patch("triton.cudagraph_max_recording", 1)
+        def test_fallback_to_eager_if_recompiling_too_many_times(self):
+            def fn(x, y):
+                return x * y
+
+            with capture_stderr() as captured_output:
+                # We have 3 graphs here
+                #             None
+                #       /                           \
+                # (fwd w/ p1, Graph 0)            (bwd w/p2, Graph3)
+                # (bwd w/ p1, Graph 1)
+                # All other graphs are skipped because we hit the max recording limit 
+                # (=1 for each node and function pair) 
+                self.run_static_input_param_test(fn, 3)
+
+            FileCheck().check(
+                "skipping cudagraph due to function 0 exceeding max recording limit (=1) on cudagraph node None"
+            ).check("skipping cudagraph due to function 1 exceeding max recording limit (=1) on cudagraph node None").run(captured_output[0])
+            self.assertEqual(counters["inductor"]["cudagraph_skips"], 2)
+
+        
+
 
     instantiate_parametrized_tests(CudaGraphTreeTests)
 
