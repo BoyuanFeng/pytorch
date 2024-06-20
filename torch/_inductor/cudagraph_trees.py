@@ -754,10 +754,12 @@ class CUDAGraphNode:
         self.device = device_index
         self.stack_traces = stack_traces
         self.stream = stream
+
         # If we are inlining builtin nn modules we will re-record if static inputs change
         # if not we should error because dynamo should have recompiled in this case
         self.rerecord_if_static_inputs_change = (
             torch._dynamo.config.inline_inbuilt_nn_modules
+            or torch._inductor.config.cudagraph_support_input_mutation
         )
 
         # if this is a root parent will be None. use weakref to prevent reference cycle
@@ -956,7 +958,7 @@ class CUDAGraphNode:
         if dst_tensors:
             torch._foreach_copy_(dst_tensors, src_tensors)
 
-    def check_static_inputs_are_stable(self, new_inputs) -> bool:
+    def check_static_inputs_are_stable(self, new_inputs):
         # avoid checking managed tensor static points since we already checked those in check_invariants
         if (
             not self.rerecord_if_static_inputs_change
@@ -966,12 +968,6 @@ class CUDAGraphNode:
                 self.non_managed_static_input_idxs,
             )
         ):
-            print(f"here. {self.rerecord_if_static_inputs_change}")
-            if (
-                torch._inductor.config.triton.cudagraph_fallback_to_eager_instead_of_error
-            ):
-                return False
-
             # this should error
             static_tensors = [new_inputs[i] for i in self.non_managed_static_input_idxs]
             data_ptrs = [
@@ -990,8 +986,6 @@ class CUDAGraphNode:
                     )
             torch._check(False, lambda: error_msg)
 
-        return True
-
     def run_first_inputs(self, new_inputs):
         if config.triton.fast_path_cudagraph_asserts:
             self.debug_check_invariants_before_invocation()
@@ -1004,8 +998,7 @@ class CUDAGraphNode:
         return outputs
 
     def run(self, new_inputs):
-        if not self.check_static_inputs_are_stable(new_inputs):
-            return self.wrapped_function.model(new_inputs), False
+        self.check_static_inputs_are_stable(new_inputs)
 
         self._copy_inputs_and_remove_from_src(self.reconstructed_inputs, new_inputs)
         new_inputs.clear()
