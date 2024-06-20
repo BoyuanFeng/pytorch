@@ -1016,7 +1016,7 @@ class CUDAGraphNode:
         # Reset this to run the check in the future
         self.static_inputs_stable = False
 
-        return outputs, True
+        return outputs
 
     def reconstruct_outputs(self):
         "Reconstruct output tensors according to their saved metadata and alias information"
