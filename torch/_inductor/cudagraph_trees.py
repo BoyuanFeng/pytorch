@@ -2047,14 +2047,10 @@ class CUDAGraphTreeManager:
         return node.run_first_inputs(new_inputs)
 
     def execute_node(self, node: CUDAGraphNode, new_inputs) -> List[Optional[Tensor]]:
-        out, executed_cudagraph = node.run(new_inputs)
-
-        if executed_cudagraph:
-            self.current_node = node
-            self.path_state = ExecutionState.EXECUTION
-            self.update_generation()
-
-        return out
+        self.current_node = node
+        self.path_state = ExecutionState.EXECUTION
+        self.update_generation()
+        return node.run(new_inputs)
 
     def run_eager(self, new_inputs, function_id: FunctionID):
         # this is only stored on current node, because when we start a new path,
