@@ -665,7 +665,7 @@ class triton:
 
     # Maximal number of allowed cudagraph re-record for a function and
     # a cudagraph node. i.e., allow num_recording <= cudagraph_max_recording
-    cudagraph_max_recording = 100
+    cudagraph_max_recording = 5
 
     # synchronize after cudagraph invocation
     force_cudagraph_sync = False

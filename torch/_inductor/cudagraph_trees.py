@@ -755,11 +755,11 @@ class CUDAGraphNode:
         self.stack_traces = stack_traces
         self.stream = stream
 
-        # If we are inlining builtin nn modules we will re-record if static inputs change
+        # Re-record if static inputs change tensor addresses
         # if not we should error because dynamo should have recompiled in this case
         self.rerecord_if_static_inputs_change = (
             torch._dynamo.config.inline_inbuilt_nn_modules
-            or torch._inductor.config.cudagraph_support_input_mutation
+            or torch._inductor.config.triton.cudagraph_support_input_mutation
         )
 
         # if this is a root parent will be None. use weakref to prevent reference cycle
