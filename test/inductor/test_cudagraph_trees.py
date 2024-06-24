@@ -1774,7 +1774,7 @@ if HAS_CUDA and not TEST_WITH_ASAN:
                     [foo.goo.linear.weight, foo.goo.linear.bias, foo.static_tensor, inp]
                 )
 
-        @torch._inductor.config.patch("triton.cudagraph_support_input_mutation", True)
+        @torch._inductor.config.patch("triton.rerecord_if_static_inputs_change", True)
         def test_rerecord_if_static_input_address_changed(self):
             class Goo(torch.nn.Module):
                 def __init__(self) -> None:

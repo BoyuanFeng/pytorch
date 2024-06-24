@@ -755,13 +755,6 @@ class CUDAGraphNode:
         self.stack_traces = stack_traces
         self.stream = stream
 
-        # Re-record if static inputs change tensor addresses
-        # if not we should error because dynamo should have recompiled in this case
-        self.rerecord_if_static_inputs_change = (
-            torch._dynamo.config.inline_inbuilt_nn_modules
-            or torch._inductor.config.triton.cudagraph_support_input_mutation
-        )
-
         # if this is a root parent will be None. use weakref to prevent reference cycle
         self._parent = weakref.ref(parent) if parent is not None else None
         # reference to the shared memory pool for the entire cuda graphs tree
@@ -961,7 +954,7 @@ class CUDAGraphNode:
     def check_static_inputs_are_stable(self, new_inputs):
         # avoid checking managed tensor static points since we already checked those in check_invariants
         if (
-            not self.rerecord_if_static_inputs_change
+            not torch._inductor.config.triton.rerecord_if_static_inputs_change
             and not torch._C._tensors_data_ptrs_at_indices_equal(
                 new_inputs,
                 self.static_input_data_ptrs,
@@ -1586,7 +1579,7 @@ class CUDAGraphNode:
         # if we are not inlining builtin nn modules, we check this in check_static_inputs_are_stable
         # and error if they are not stable
         if (
-            self.rerecord_if_static_inputs_change
+            torch._inductor.config.triton.rerecord_if_static_inputs_change
             and not torch._C._tensors_data_ptrs_at_indices_equal(
                 inputs, self.static_input_data_ptrs, self.static_input_idxs
             )

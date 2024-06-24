@@ -663,6 +663,17 @@ class triton:
     # Enable cudagraph support for mutated inputs from prior cudagraph pool
     cudagraph_support_input_mutation = False
 
+    # Enable re-record a cudagraph when static tensor address changed.
+    # if not we should error when it changed.
+    rerecord_if_static_inputs_change = (
+        True
+        if (
+            torch._dynamo.config.inline_inbuilt_nn_modules
+            or cudagraph_support_input_mutation
+        )
+        else False
+    )
+
     # Maximal number of allowed cudagraph re-record for a function and
     # a cudagraph node. i.e., allow num_recording <= cudagraph_max_recording
     cudagraph_max_recording = 5
