@@ -15,6 +15,7 @@ from torch._dynamo.utils import counters
 from torch._inductor import config
 from torch._inductor.compile_fx import compile_fx_inner
 from torch._inductor.cudagraph_trees import cudagraphify_impl as tree_cudagraphify_impl
+from torch._inductor.cudagraph_utils import FunctionID
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.testing import FileCheck
@@ -1804,9 +1805,13 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             foo.static_tensor = torch.ones((2, 2), device="cuda")
             foo.goo.linear.bias = torch.nn.Parameter(torch.ones((2,), device="cuda"))
 
-            self.curr_node().run(
-                [foo.goo.linear.weight, foo.goo.linear.bias, foo.static_tensor, inp]
+            # Run with specific function id to avoid dynamo recompiling
+            self.get_manager().run(
+                [foo.goo.linear.weight, foo.goo.linear.bias, foo.static_tensor, inp],
+                FunctionID(0),
             )
+
+            self.assertEqual(self.get_manager().new_graph_id().id, 2)
 
         def _run_iter(self, param, fn):
             fwd_output = fn(torch.ones(2, 2), param)
@@ -1822,11 +1827,9 @@ if HAS_CUDA and not TEST_WITH_ASAN:
                 self.assertEqual(exp_output, compiled_output)
                 self.assertEqual(exp_grad, compiled_grad)
 
-
         def run_static_input_param_test(self, fn_eager, num_graphs):
             with torch.device("cuda"):
                 fn_compiled = torch.compile(fn_eager, mode="reduce-overhead")
-
 
                 p1 = torch.nn.Parameter(torch.rand([2, 2]))
                 self._assert_equal_multi_loop(p1, fn_eager, fn_compiled)
@@ -2013,7 +2016,7 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             FileCheck().check_count(
                 "skipping cudagraph due to function 0 exceeding max recording limit (=1) on cudagraph node None",
                 1,
-                exactly=True
+                exactly=True,
             ).check_count(
                 "skipping cudagraph due to function 1 exceeding max recording limit (=1) on cudagraph node None",
                 1,
@@ -2038,11 +2041,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             self.run_static_input_param_test(fn, 4)
             self.assertEqual(counters["inductor"]["cudagraph_skips"], 0)
 
-        # Suppose we have node a->b->c, and b is falled back. What would happen to c?
-
-
-
-
         @torch._inductor.config.patch("triton.cudagraph_support_input_mutation", True)
         def test_tensor_constant_mutation(self):
             class Foo(torch.nn.Module):
@@ -2059,16 +2057,6 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             inp = torch.rand((2, 3), device="cuda")
             for _ in range(3):
                 foo(inp)
-
-        # This handles updating tensor constant during forward
-
-        # This handles updating buffer during forward
-
-        # This handles updating parameters during forward
-
-        # This handles out-of-place optimizer during forward
-
-        # We will not fallback for node b -> function_id if function_id has been recorded too many times for node a, but not for node b.
 
     instantiate_parametrized_tests(CudaGraphTreeTests)
 
