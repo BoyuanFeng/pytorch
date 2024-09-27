@@ -4,7 +4,7 @@
 import functools
 from collections import namedtuple
 from contextlib import nullcontext
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 from unittest import expectedFailure, skipUnless
 from unittest.mock import patch
 
@@ -195,6 +195,13 @@ test_Bq_Bkv = [
     (5, 1),
     (8, 1),
     (16, 1),
+]
+
+test_block_size = [
+    64,
+    128,
+    (1, 64),
+    (128, 64),
 ]
 
 (Hq, Hkv) = (16, 8)
@@ -669,6 +676,19 @@ class TestFlexDecoding(InductorTestCase):
         block_mask = create_block_mask(mod, B, 1, 1, S, BLOCK_SIZE=page_size)
         breakpoint()
         self.run_test_with_paged_attention(score_mod, dtype, Q_B=B, Q_H=Hq, KV_B=B, KV_H=Hkv, KV_S=S, block_mask=block_mask)
+
+    @supported_platform
+    @common_utils.parametrize("dtype", test_dtypes)
+    @common_utils.parametrize("score_mod", test_score_mods)
+    @common_utils.parametrize("BLOCK_SIZE", test_block_size)
+    def test_builtin_score_mods_different_block_size(
+        self,
+        dtype: torch.dtype,
+        score_mod: Callable,
+        BLOCK_SIZE: Union[int, Tuple[int, int]],
+    ):
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, BLOCK_SIZE=BLOCK_SIZE)
+        self.run_test(score_mod, dtype, block_mask=block_mask)
 
     def input_strides_1(B, H, S, D):
         return ((H * S * D, S * D, D, 1), 997)  # offset
